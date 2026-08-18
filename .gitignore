@@ -1,0 +1,6 @@
+work/
+out/*.mp4
+!out/*_discord.mp4
+__pycache__/
+*.pyc
+ffmpeg2pass-*
