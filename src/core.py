@@ -137,31 +137,36 @@ class Pen:
     def __init__(self, draw: ImageDraw.ImageDraw, ss: int):
         self.d = draw
         self.ss = ss
+        self.scale = 1.0
+
+    @property
+    def k(self) -> float:
+        return self.ss * self.scale
 
     def _p(self, xy):
-        return [c * self.ss for c in xy]
+        return [c * self.k for c in xy]
 
     def line(self, p0, p1, width, alpha=1.0):
         if alpha <= 0.002:
             return
         self.d.line([*self._p(p0), *self._p(p1)], fill=int(255 * clamp01(alpha)),
-                    width=max(1, int(round(width * self.ss))), joint="curve")
+                    width=max(1, int(round(width * self.k))), joint="curve")
 
     def polyline(self, pts, width, alpha=1.0, closed=False):
         if alpha <= 0.002 or len(pts) < 2:
             return
-        flat = [c * self.ss for p in pts for c in p]
+        flat = [c * self.k for p in pts for c in p]
         if closed:
-            flat += [pts[0][0] * self.ss, pts[0][1] * self.ss]
+            flat += [pts[0][0] * self.k, pts[0][1] * self.k]
         self.d.line(flat, fill=int(255 * clamp01(alpha)),
-                    width=max(1, int(round(width * self.ss))), joint="curve")
+                    width=max(1, int(round(width * self.k))), joint="curve")
 
     def disc(self, c, r, alpha=1.0):
         if alpha <= 0.002 or r <= 0:
             return
         x, y = c
-        self.d.ellipse([(x - r) * self.ss, (y - r) * self.ss,
-                        (x + r) * self.ss, (y + r) * self.ss],
+        self.d.ellipse([(x - r) * self.k, (y - r) * self.k,
+                        (x + r) * self.k, (y + r) * self.k],
                        fill=int(255 * clamp01(alpha)))
 
     def ring(self, c, r, width, alpha=1.0):
@@ -171,23 +176,23 @@ class Pen:
         if alpha <= 0.002 or r <= 0 or abs(a1 - a0) < 0.05:
             return
         x, y = c
-        self.d.arc([(x - r) * self.ss, (y - r) * self.ss,
-                    (x + r) * self.ss, (y + r) * self.ss],
+        self.d.arc([(x - r) * self.k, (y - r) * self.k,
+                    (x + r) * self.k, (y + r) * self.k],
                    a0, a1, fill=int(255 * clamp01(alpha)),
-                   width=max(1, int(round(width * self.ss))))
+                   width=max(1, int(round(width * self.k))))
 
     def rounded_rect(self, box, radius, width, alpha=1.0):
         if alpha <= 0.002:
             return
-        x0, y0, x1, y1 = [c * self.ss for c in box]
-        self.d.rounded_rectangle([x0, y0, x1, y1], radius=radius * self.ss,
+        x0, y0, x1, y1 = [c * self.k for c in box]
+        self.d.rounded_rectangle([x0, y0, x1, y1], radius=radius * self.k,
                                  outline=int(255 * clamp01(alpha)),
-                                 width=max(1, int(round(width * self.ss))))
+                                 width=max(1, int(round(width * self.k))))
 
     def polygon(self, pts, alpha=1.0):
         if alpha <= 0.002:
             return
-        self.d.polygon([c * self.ss for p in pts for c in p],
+        self.d.polygon([c * self.k for p in pts for c in p],
                        fill=int(255 * clamp01(alpha)))
 
 
@@ -205,14 +210,26 @@ class Frame:
         self.buf = np.zeros((h, w, 3), np.float32)
         self._shape: dict[tuple, tuple] = {}
         self._text: dict[tuple, tuple] = {}
+        self._soft: dict[tuple, tuple] = {}
 
     # -- Layer-Zugriff -------------------------------------------------
-    def pen(self, color, glow: float = 1.0) -> Pen:
-        key = (color, round(glow, 2))
+    def pen(self, color, glow: float = 1.0, ss: int = 2) -> Pen:
+        """Zeichenebene. ss=2 fuer Kanten, die scharf sein muessen, sonst ss=1."""
+        key = (color, round(glow, 2), ss)
         if key not in self._shape:
-            img = Image.new("L", (self.w * self.SS, self.h * self.SS), 0)
-            self._shape[key] = (img, Pen(ImageDraw.Draw(img), self.SS))
+            img = Image.new("L", (self.w * ss, self.h * ss), 0)
+            self._shape[key] = (img, Pen(ImageDraw.Draw(img), ss))
         return self._shape[key][1]
+
+    def soft(self, color, gain: float = 1.0) -> Pen:
+        """Sehr billige Ebene in Glow-Aufloesung - fuer Licht ohne harte Kante."""
+        key = (color, round(gain, 2))
+        if key not in self._soft:
+            img = Image.new("L", (self.gw, self.gh), 0)
+            self._soft[key] = (img, Pen(ImageDraw.Draw(img), 1))
+        pen = self._soft[key][1]
+        pen.scale = self.gw / self.w
+        return pen
 
     def text_layer(self, color, glow: float = 1.0) -> ImageDraw.ImageDraw:
         key = (color, round(glow, 2))
@@ -253,13 +270,17 @@ class Frame:
         """Liefert (scharfes Bild, kleiner Lichtbuffer fuer den Glow)."""
         gw, gh = self.gw, self.gh
         glow = np.zeros((gh, gw, 3), np.float32)
-        for (color, gstr), (img, _) in self._shape.items():
+        for (color, gstr, ss), (img, _) in self._shape.items():
             col = np.asarray(color, np.float32)
-            m = np.asarray(img.reduce(self.SS), np.float32) / 255.0
+            m = (np.asarray(img.reduce(ss), np.float32) if ss > 1
+                 else np.asarray(img, np.float32)) / 255.0
             self.buf += m[..., None] * col
             if gstr > 0.01:
                 small = np.asarray(img.resize((gw, gh), Image.BILINEAR), np.float32) / 255.0
                 glow += small[..., None] * (col * gstr)
+        for (color, gain), (img, _) in self._soft.items():
+            glow += (np.asarray(img, np.float32) / 255.0)[..., None] * \
+                (np.asarray(color, np.float32) * gain)
         for (color, gstr), (img, _) in self._text.items():
             col = np.asarray(color, np.float32)
             self.buf += (np.asarray(img, np.float32) / 255.0)[..., None] * col
@@ -328,6 +349,12 @@ class Backdrop:
             self.clouds.append(c ** 2.1)
 
         self.vig = np.clip(1.10 - 0.70 * (r * 1.34) ** 2.0, 0.34, 1.0).astype(np.float32)[..., None]
+        # Tonwertkurve als Tabelle: linear bis zum Knie, darueber weich gerollt
+        knee, steps = 0.82, 4096
+        x = np.linspace(0, 6.0, steps, dtype=np.float32)
+        y = np.where(x <= knee, x, knee + (1 - knee) * (1 - np.exp(-(x - knee) / (1 - knee))))
+        self._lut = np.clip(y, 0, 1).astype(np.float32)
+        self._lut_scale = (steps - 1) / 6.0
         self.grain = [rng.normal(0, 1, (h, w, 1)).astype(np.float32) for _ in range(6)]
 
     def mist(self, t: float, gain: float = 1.0) -> np.ndarray:
@@ -347,9 +374,7 @@ class Backdrop:
         out = buf + self.base + np.asarray(gimg, np.float32) / 255.0
         out *= self.vig
         out *= exposure
-        # Soft-Knee: Mitteltoene bleiben linear, nur Spitzen werden gerollt
-        knee = 0.82
-        hi = out > knee
-        out[hi] = knee + (1.0 - knee) * (1.0 - np.exp(-(out[hi] - knee) / (1.0 - knee)))
+        idx = np.clip(out * self._lut_scale, 0, self._lut.size - 1).astype(np.int32)
+        out = self._lut[idx]
         out += self.grain[i % len(self.grain)] * 0.006
         return (np.clip(out, 0, 1) * 255).astype(np.uint8)

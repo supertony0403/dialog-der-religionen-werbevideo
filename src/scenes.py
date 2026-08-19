@@ -1,26 +1,21 @@
-"""Storyboard des Werbevideos - 40 Sekunden in sechs Szenen.
+"""Storyboard des Trailers - 72 Sekunden in acht Bewegungen.
 
-    S1  0.00 - 5.33   Die eine Frage
-    S2  5.33 - 13.33  Der Fragensturm
-    S3 13.33 - 21.33  Der Kreis: sieben Zeichen, ein Netz aus Gespraechen
-    S4 21.33 - 29.33  Die Haltung des Servers
-    S5 29.33 - 34.67  Emblem und Name
-    S6 34.67 - 40.00  Einladung
-
-Alle Positionen sind formatunabhaengig: horizontal ueber die Bildmitte,
-vertikal ueber Anteile der Bildhoehe, Groessen ueber die Layout-Einheit u.
+Zeiten und Texte stehen in timing.py, damit Bild und Musik dieselbe Partitur
+lesen. Jede Szene bringt ihre eigene Hintergrundstimmung mit: Sternenflug,
+Lichtschneisen, Glut, stroemender Nebel - und Kamerastoesse auf den Schlaegen.
 """
 from __future__ import annotations
 
 import math
 
+import backdrops as bd
 import symbols
+import timing as T
 from core import (BLUE, DIM, GOLD, GOLD_PALE, TEAL, VIOLET, WARM, ease_in,
-                  ease_out, fade, font, seg, smooth, sys_font)
+                  ease_out, fade, font, seg, smooth, sys_font, wrap)
 
-T1, T2, T3, T4, T5, T6, TEND = 0.0, 5.3333, 13.3333, 21.3333, 29.3333, 34.6667, 40.0
-RING_R = 330.0          # Radius des grossen Kreises in Layout-Einheiten
-EMBLEM_Y = 0.335        # Ankerhoehe des Emblems (Anteil der Bildhoehe)
+RING_R = 372.0
+EMBLEM_Y = 0.300
 
 
 class Layout:
@@ -32,354 +27,440 @@ class Layout:
         self.text_w = self.w * 0.86
 
     def y(self, frac: float) -> float:
-        """Anteil der Bildhoehe; im Hochformat um die Mitte gestaucht."""
         if self.tall:
-            frac = 0.5 + (frac - 0.5) * 0.78
+            frac = 0.5 + (frac - 0.5) * 0.80
         return self.h * frac
 
     def x(self, dx: float, width: float = 0.0) -> float:
-        """Horizontaler Versatz; haelt den Textblock immer im sicheren Bereich."""
         x = self.cx + dx * self.u
         margin = self.w * 0.055 + width / 2
         return max(margin, min(self.w - margin, x))
 
     def fit(self, name: str, size: float, weight: int, text: str,
             max_frac: float = 0.88, tracking: float = 0.0):
-        """Schrift so weit verkleinern, bis die Zeile ins Bild passt."""
         limit = self.w * max_frac
-        for _ in range(14):
+        for _ in range(16):
             f = font(name, size * self.u, weight)
             w = sum(f.getlength(ch) for ch in text) + tracking * max(0, len(text) - 1)
-            if w <= limit or size < 12:
+            if w <= limit or size < 11:
                 return f
             size *= 0.94
         return font(name, size * self.u, weight)
 
 
-def _lines(frame, L, text, f, y, color, alpha, tracking=0.0, lead=1.34, anchor="mm"):
+def block(frame, L, text, f, y, color, alpha, tracking=0.0, lead=1.30):
     rows = []
     for para in text.split("\n"):
-        rows += [""] if not para else _wrap(f, para, L.text_w, tracking)
+        rows += wrap(f, para, L.text_w, tracking) if para else [""]
     step = f.size * lead
     top = y - step * (len(rows) - 1) / 2
     for i, row in enumerate(rows):
         frame.text(row, f, (L.cx, top + i * step), color, alpha,
-                   anchor=anchor, tracking=tracking)
-    return len(rows)
+                   anchor="mm", tracking=tracking)
+    return len(rows) * step
 
 
-def _wrap(f, s, max_w, tracking=0.0):
-    from core import wrap
-    return wrap(f, s, max_w, tracking)
+# ------------------------------------------------------------- Buehne -------
+class Stage:
+    """Haelt die bewegten Hintergrundebenen (einmal pro Prozess erzeugt)."""
+
+    def __init__(self, w: int, h: int, gw: int, gh: int):
+        self.stars = bd.Starfield(430, seed=5)
+        self.dust = bd.Starfield(220, seed=31)
+        self.rays = bd.GodRays(15, seed=9)
+        self.embers = bd.Embers(150, seed=17)
+        self.flow = bd.Flow(gw, gh, seed=23)
+
+    # Stimmung je Szene ------------------------------------------------
+    def background(self, fr, L, t):
+        warp = (0.25 + 2.9 * smooth(seg(t, T.S_STORM, T.S_STORM + 3.0))
+                - 2.0 * smooth(seg(t, T.S_PHIL - 0.6, T.S_PHIL + 1.2))
+                + 1.4 * smooth(seg(t, T.S_TWELVE - 0.5, T.S_TWELVE + 1.5))
+                - 1.1 * smooth(seg(t, T.S_TWELVE + 2.0, T.S_TWELVE + 5.0))
+                + 2.6 * smooth(seg(t, T.S_CLAIM, T.S_CLAIM + 1.6))
+                - 2.4 * smooth(seg(t, T.S_EMBLEM, T.S_EMBLEM + 1.2)))
+        warp = max(0.12, warp)
+        star_gain = (0.30 + 0.70 * smooth(seg(t, T.S_STORM - 1.0, T.S_STORM + 1.0))
+                     - 0.45 * smooth(seg(t, T.S_DEBATE, T.S_DEBATE + 1.2))
+                     + 0.40 * smooth(seg(t, T.S_TWELVE, T.S_TWELVE + 1.0)))
+        self.stars.draw(fr, t, warp, max(0.0, star_gain) * 0.85, WARM, warp=warp * 1.6)
+        self.dust.draw(fr, t, 0.12, 0.35, BLUE, warp=0.4)
+
+        ray_gain = (0.55 * smooth(seg(t, T.S_PHIL - 0.5, T.S_PHIL + 1.5))
+                    - 0.45 * smooth(seg(t, T.S_DEBATE - 0.5, T.S_DEBATE + 1.0))
+                    + 0.75 * smooth(seg(t, T.S_TWELVE, T.S_TWELVE + 2.0))
+                    - 0.35 * smooth(seg(t, T.S_CLAIM, T.S_CLAIM + 1.5))
+                    + 0.85 * smooth(seg(t, T.S_EMBLEM, T.S_EMBLEM + 0.8)))
+        origin = (L.cx, L.y(0.5) if t < T.S_EMBLEM else L.y(EMBLEM_Y))
+        self.rays.draw(fr, t, origin, max(0.0, ray_gain), GOLD, length=1.6)
+
+        ember_gain = (0.35 + 0.45 * smooth(seg(t, T.S_PHIL, T.S_PHIL + 2.0))
+                      + 0.35 * smooth(seg(t, T.S_CLAIM, T.S_CLAIM + 1.0))
+                      - 0.30 * smooth(seg(t, T.S_CTA, T.S_CTA + 1.5)))
+        self.embers.draw(fr, t, max(0.0, ember_gain) * 0.55, GOLD)
+
+        # Schockwellen auf den grossen Schlaegen
+        for ht in T.BIG_HITS:
+            p = (t - ht) / 1.5
+            if 0 <= p < 1:
+                bd.shockwave(fr, (L.cx, L.y(0.5)), p, 0.55, GOLD_PALE)
+        p = (t - T.S_EMBLEM) / 2.2
+        if 0 <= p < 1:
+            bd.shockwave(fr, (L.cx, L.y(EMBLEM_Y)), p, 1.5, WARM, spread=1.7)
+            bd.shockwave(fr, (L.cx, L.y(EMBLEM_Y)), min(1.0, p * 1.5), 0.9, GOLD, spread=1.2)
+
+    def mist(self, t):
+        gain = (0.55 + 0.45 * smooth(seg(t, 2.0, 12.0))
+                - 0.20 * smooth(seg(t, T.S_EMBLEM, T.S_EMBLEM + 2.0)))
+        tint = (0.045, 0.060, 0.150)
+        return self.flow.field(t, gain, tint)
 
 
-# ------------------------------------------------------------------ S1 ------
-def scene_one(fr, L, t):
-    if t > T2 + 0.7:
+# ------------------------------------------------------------ Kamera --------
+def camera_params(t: float):
+    zoom = bd.punch_at(t, T.BIG_HITS, 0.052, 5.0)
+    zoom *= bd.punch_at(t, T.SMALL_HITS, 0.016, 7.0)
+    zoom *= bd.punch_at(t, [T.S_EMBLEM], 0.075, 3.2)
+    # ruhige Eigenbewegung, je Szene neu ansetzend
+    for a, b in ((T.S_INTRO, T.S_STORM), (T.S_STORM, T.S_PHIL), (T.S_PHIL, T.S_DEBATE),
+                 (T.S_DEBATE, T.S_TWELVE), (T.S_TWELVE, T.S_CLAIM),
+                 (T.S_CLAIM, T.S_EMBLEM), (T.S_EMBLEM, T.END)):
+        if a <= t < b:
+            zoom *= 1.0 + 0.022 * seg(t, a, b)
+            break
+    dx, dy = bd.shake_at(t, T.BIG_HITS, 1.0)
+    sx, sy = bd.shake_at(t, T.SMALL_HITS, 0.30)
+    ex, ey = bd.shake_at(t, [T.S_EMBLEM], 1.9, 5.0)
+    return zoom, dx + sx + ex, dy + sy + ey
+
+
+def exposure(t: float) -> float:
+    e = 1.32 * smooth(seg(t, 0.0, 1.2))
+    for ht in T.BIG_HITS:
+        e += 0.30 * math.exp(-((t - ht - 0.04) / 0.16) ** 2)
+    for ht in T.SMALL_HITS:
+        e += 0.10 * math.exp(-((t - ht - 0.03) / 0.12) ** 2)
+    e += 1.05 * math.exp(-((t - T.S_EMBLEM - 0.05) / 0.22) ** 2)
+    e *= 1.0 - 0.30 * smooth(seg(t, T.END - 0.5, T.END))
+    return e
+
+
+# ---------------------------------------------------------------- S1 --------
+def scene_intro(fr, L, t):
+    if t > T.S_STORM + 1.2:
         return
     u = L.u
-    # ein einzelner Lichtpunkt, der zu atmen beginnt
-    grow = ease_out(seg(t, 0.0, 2.6), 2.0)
-    breathe = 1.0 + 0.12 * math.sin(t * 1.9)
-    a = fade(t, 0.15, 1.1, T2 - 0.9, T2 + 0.35)
-    r = (3.0 + 7.0 * grow) * u * breathe
-    pen = fr.pen(GOLD_PALE, glow=1.5)
-    pen.disc((L.cx, L.y(0.46)), r, a)
-    pen.ring((L.cx, L.y(0.46)), r * 4.6 + 26 * u * grow, 1.1 * u, a * 0.30)
+    grow = ease_out(seg(t, 0.2, 3.0), 2.0)
+    beat = 0.5 + 0.5 * math.sin(t * math.tau / (2 * T.BEAT) - 1.2)
+    a = fade(t, 0.2, 1.2, T.S_STORM - 1.0, T.S_STORM + 0.1)
+    r = (3.5 + 8.0 * grow) * u * (0.88 + 0.22 * beat)
+    pen = fr.pen(GOLD_PALE, glow=1.7, ss=1)
+    pen.disc((L.cx, L.y(0.44)), r, a)
+    pen.ring((L.cx, L.y(0.44)), r * 4.2 + 30 * u * grow, 1.2 * u, a * 0.28)
 
-    q = fade(t, 1.0, 2.3, T2 - 1.0, T2 + 0.25)
+    q = fade(t, 1.4, 2.6, T.S_STORM - 1.0, T.S_STORM + 0.05)
     if q > 0:
-        f = font("EBGaramond-Italic", 96 * u, 430)
-        drift = (1 - ease_out(seg(t, 1.0, 3.0))) * 16 * u
-        _lines(fr, L, "Woran glaubst du?", f, L.y(0.60) + drift, WARM, q)
+        f = L.fit("EBGaramond-Italic", 100, 430, T.OPENING, 0.84)
+        drift = (1 - ease_out(seg(t, 1.4, 3.6))) * 20 * u
+        block(fr, L, T.OPENING, f, L.y(0.60) + drift, WARM, q)
 
 
-# ------------------------------------------------------------------ S2 ------
-QUESTIONS = [
-    # Text, Startzeit, dx, y-Anteil, Groesse, Farbe
-    ("Gibt es Gott – oder nur uns?",      5.50, -230, 0.24, 60, WARM),
-    ("Was kommt danach?",                 6.28,  265, 0.41, 56, DIM),
-    ("Warum lässt Gott das Leid zu?",     7.06, -205, 0.59, 62, GOLD_PALE),
-    ("Braucht Moral Religion?",           7.84,  245, 0.77, 56, BLUE),
-    ("Ist Glaube Privatsache?",           8.62,  185, 0.28, 54, DIM),
-    ("Hat Wissenschaft Gott ersetzt?",    9.40, -255, 0.48, 58, VIOLET),
-    ("Wer entscheidet, was wahr ist?",   10.18, -190, 0.87, 58, WARM),
-    ("Und wenn wir uns alle irren?",     10.96,  225, 0.68, 60, GOLD_PALE),
-]
-
-
-def scene_two(fr, L, t):
-    if not (T2 - 0.8 <= t <= T3 + 0.6):
+# ---------------------------------------------------------------- S2 --------
+def scene_storm(fr, L, t):
+    if not (T.S_STORM - 0.6 <= t <= T.S_PHIL + 0.8):
         return
     u = L.u
-    for i, (text, t0, dx, yf, size, color) in enumerate(QUESTIONS):
-        a = fade(t, t0, t0 + 0.8, t0 + 3.4, t0 + 4.6)
-        a *= 1.0 - smooth(seg(t, 12.05, 12.75))
+    for i, (text, beats, side, yf) in enumerate(T.QUESTIONS):
+        t0 = T.S_STORM + beats * T.BEAT
+        a = fade(t, t0, t0 + 0.45, t0 + 3.6, t0 + 4.6)
+        a *= 1.0 - smooth(seg(t, T.S_PHIL - 0.9, T.S_PHIL - 0.1))
         if a <= 0.004:
             continue
-        # nach dem Kreisbeginn verstummen alle Stimmen
-        a *= 1.0 - smooth(seg(t, T3 - 0.5, T3 + 0.55))
-        rise = (1 - ease_out(seg(t, t0, t0 + 3.4))) * 26 * u
-        f = L.fit("EBGaramond-Italic", size, 430, text, 0.86)
-        x, y = L.x(dx, f.getlength(text)), L.y(yf) + rise
-        fr.text(text, f, (x, y), color, a, anchor="mm")
-
-    lead = fade(t, 12.45, 13.05, T3 + 0.05, T3 + 0.55)
-    if lead > 0:
-        txt = "FRAGEN, DIE MAN NICHT ALLEIN BEANTWORTET"
-        f = L.fit("Cinzel", 46, 600, txt, 0.90, tracking=9 * u)
-        _lines(fr, L, txt, f, L.y(0.50), GOLD_PALE, lead, tracking=9 * u)
+        pop = ease_out(seg(t, t0, t0 + 0.55), 2.6)
+        size = (52 + 14 * (i % 3)) * (0.78 + 0.22 * pop)
+        f = L.fit("EBGaramond-Italic", size, 440, text, 0.82)
+        rise = (1 - ease_out(seg(t, t0, t0 + 3.0))) * 30 * u
+        x = L.x(side * 230, f.getlength(text))
+        fr.text(text, f, (x, L.y(yf) + rise), WARM if i % 2 else GOLD_PALE, a, anchor="mm")
 
 
-def _tw(f, s):
-    return f.getlength(s)
+# ---------------------------------------------------------------- S3 --------
+def scene_philosophers(fr, L, t):
+    if not (T.S_PHIL - 0.5 <= t <= T.S_DEBATE + 0.6):
+        return
+    u = L.u
+    times = T.quote_times()
+    for i, ((quote, who), t0) in enumerate(zip(T.QUOTES, times)):
+        last = i == len(T.QUOTES) - 1
+        hold = T.QUOTE_STEP + (0.9 if last else 0.0)
+        a = fade(t, t0, t0 + 0.32, t0 + hold - 0.55, t0 + hold - 0.05)
+        if a <= 0.004:
+            continue
+        prog = ease_out(seg(t, t0, t0 + 0.9), 2.2)
+        yf = 0.44 + 0.03 * ((i % 3) - 1)
+        fq = L.fit("EBGaramond-Italic", 86, 500, quote, 0.84)
+        tr = (26 - 26 * prog) * u
+        h = block(fr, L, quote, fq, L.y(yf), WARM, a, tracking=tr, lead=1.24)
+
+        fn = L.fit("Cinzel", 38, 640, who.upper(), 0.70, tracking=11 * u)
+        na = fade(t, t0 + 0.30, t0 + 0.75, t0 + hold - 0.55, t0 + hold - 0.05)
+        ny = L.y(yf) + h / 2 + 52 * u
+        block(fr, L, who.upper(), fn, ny, GOLD, na, tracking=10 * u)
+        pen = fr.pen(GOLD, glow=1.2, ss=1)
+        half = L.w * 0.05 * ease_out(seg(t, t0 + 0.30, t0 + 0.9))
+        pen.line((L.cx - half, ny - 34 * u), (L.cx + half, ny - 34 * u), 1.2 * u, na * 0.8)
 
 
-# ------------------------------------------------------------------ S3 ------
-LINKS = [(0, 3), (1, 5), (2, 6), (4, 0), (6, 3), (1, 2), (5, 4), (0, 6), (2, 4)]
+# ---------------------------------------------------------------- S4 --------
+def _bubble_metrics(L, text):
+    f = font("Inter", 46 * L.u, 440)
+    rows = wrap(f, text, L.w * 0.56)
+    w = max(f.getlength(r) for r in rows)
+    lead = f.size * 1.28
+    return f, rows, w, len(rows) * lead
+
+
+def scene_debate(fr, L, t):
+    if not (T.S_DEBATE - 0.5 <= t <= T.S_TWELVE + 0.5):
+        return
+    u = L.u
+    times = T.debate_times()
+    metrics = [_bubble_metrics(L, txt) for _, txt in T.DEBATE]
+    pad_x, pad_y, gap = 42 * u, 30 * u, 30 * u
+    heights = [m[3] + 2 * pad_y for m in metrics]
+
+    exit_ = smooth(seg(t, times[-1] + 1.1, times[-1] + 1.9))
+    base_y = L.y(0.80) + (1 - ease_out(seg(t, T.S_DEBATE, T.S_DEBATE + 0.6))) * 40 * u
+
+    for i, ((side, text), t0) in enumerate(zip(T.DEBATE, times)):
+        appear = smooth(seg(t, t0 + 0.12, t0 + 0.42))
+        if appear <= 0.004:
+            continue
+        # alles darunter schiebt die Aelteren nach oben
+        push = sum((heights[j] + gap) * smooth(seg(t, times[j] - 0.04, times[j] + 0.22))
+                   for j in range(i + 1, len(T.DEBATE)))
+        f, rows, tw, th = metrics[i]
+        h = heights[i]
+        drop = (1 - ease_out(seg(t, t0 + 0.12, t0 + 0.5), 2.4)) * 46 * u
+        slide = (1 - ease_out(seg(t, t0 + 0.12, t0 + 0.55), 2.6)) * 70 * u * side
+        y_bottom = base_y - push - 120 * u * exit_ + drop
+        y_top = y_bottom - h
+        depth = push / max(1.0, (heights[0] + gap))
+        alpha = appear * max(0.0, 1.0 - 0.17 * depth) * (1 - exit_)
+        if alpha <= 0.01:
+            continue
+        bw = tw + 2 * pad_x
+        x0 = (L.w * 0.08 if side < 0 else L.w * 0.92 - bw) + slide
+        color = GOLD if side < 0 else BLUE
+        fr.soft(color, 0.30).rounded_rect((x0, y_top, x0 + bw, y_bottom),
+                                          24 * u, 26 * u, alpha * 0.5)
+        fr.pen(color, glow=1.1).rounded_rect((x0, y_top, x0 + bw, y_bottom),
+                                             24 * u, 1.8 * u, alpha * 0.9)
+        for k, row in enumerate(rows):
+            fr.text(row, f, (x0 + pad_x, y_top + pad_y + f.size * 1.28 * (k + 0.5)),
+                    WARM, alpha, anchor="lm")
+        fr.pen(color, glow=1.4, ss=1).disc((x0 + (-10 * u if side < 0 else bw + 10 * u),
+                                            y_top + pad_y + f.size * 0.64), 4.0 * u, alpha)
+
+    closer = fade(t, times[-1] + 1.5, times[-1] + 2.1, T.S_TWELVE - 0.5, T.S_TWELVE + 0.1)
+    if closer > 0:
+        f = L.fit("Cinzel", 56, 680, T.DEBATE_CLOSER, 0.86, tracking=10 * u)
+        block(fr, L, T.DEBATE_CLOSER, f, L.y(0.48), GOLD_PALE, closer, tracking=10 * u)
+
+
+# ---------------------------------------------------------------- S5 --------
+LINKS = [(0, 5), (1, 7), (2, 9), (3, 11), (4, 8), (6, 10), (0, 6), (2, 5),
+         (1, 4), (7, 11), (3, 8), (9, 0), (10, 2)]
 
 
 def ring_geometry(L, t):
-    """Position, Radius und Deckkraft des grossen Kreises ueber die Zeit."""
-    spin = math.radians(-90 + 2.2 * math.sin(t * 0.18))
-    pull = smooth(seg(t, T5, T5 + 0.95))         # Einzug zum Emblem in S5
-    r = RING_R * L.u * (1 - 0.72 * pull)
-    cy = L.y(0.50) + (L.y(EMBLEM_Y) - L.y(0.50)) * pull
+    spin = math.radians(-90 + 2.0 * math.sin(t * 0.16))
+    pull = smooth(seg(t, T.S_EMBLEM, T.S_EMBLEM + 0.9))
+    zoom_in = 1.0 + 0.10 * (1 - ease_out(seg(t, T.S_TWELVE, T.S_TWELVE + 4.0), 2.0))
+    r = RING_R * L.u * zoom_in * (1 - 0.74 * pull)
+    cy = L.y(0.47) + (L.y(EMBLEM_Y) - L.y(0.47)) * pull
     return (L.cx, cy), r, spin, pull
 
 
 def sym_positions(L, t):
     c, r, spin, pull = ring_geometry(L, t)
-    pts = []
-    for i in range(7):
-        ang = spin + i * math.tau / 7
-        pts.append((c[0] + r * math.cos(ang), c[1] + r * math.sin(ang)))
+    n = len(symbols.ORDER)
+    pts = [(c[0] + r * math.cos(spin + i * math.tau / n),
+            c[1] + r * math.sin(spin + i * math.tau / n)) for i in range(n)]
     return pts, c, r, pull
 
 
-def scene_three(fr, L, t):
-    if t < T3 - 0.7:
+def scene_twelve(fr, L, t):
+    if t < T.S_TWELVE - 0.5:
         return
     u = L.u
     pts, c, r, pull = sym_positions(L, t)
-
-    # Der Kreis zeichnet sich
-    draw = ease_in(seg(t, T3 + 0.32, T3 + 1.62), 1.4)
-    presence = 1.0 if t < T4 else (1.0 - 0.88 * smooth(seg(t, T4, T4 + 0.9)))
+    presence = 1.0
+    if t >= T.S_CLAIM:
+        presence = 1.0 - 0.86 * smooth(seg(t, T.S_CLAIM, T.S_CLAIM + 0.9))
     if pull > 0:
-        presence = max(presence, 0.20 + 0.55 * pull)
+        presence = max(presence, 0.16 + 0.5 * pull)
+
+    draw = ease_in(seg(t, T.S_TWELVE + 0.1, T.S_TWELVE + 1.15), 1.3)
     if draw > 0:
-        pen = fr.pen(GOLD, glow=1.0)
-        pen.arc(c, r, -90, -90 + 360 * draw, 2.0 * u, 0.95 * presence)
+        pen = fr.pen(GOLD, glow=1.1)
+        pen.arc(c, r, -90, -90 + 360 * draw, 2.2 * u, 0.95 * presence)
         if draw < 1:
             ang = math.radians(-90 + 360 * draw)
-            fr.pen(GOLD_PALE, glow=1.6).disc(
-                (c[0] + r * math.cos(ang), c[1] + r * math.sin(ang)), 4.2 * u, 0.95)
+            fr.pen(WARM, glow=1.9, ss=1).disc(
+                (c[0] + r * math.cos(ang), c[1] + r * math.sin(ang)), 5.5 * u, 1.0)
 
-    # Sieben Zeichen erscheinen nacheinander
-    sym_r = 62 * u * (1 - 0.55 * pull)
+    sym_r = 58 * u * (1 - 0.5 * pull)
     for i, name in enumerate(symbols.ORDER):
-        t0 = T3 + 1.62 + i * 0.50
-        app = ease_out(seg(t, t0, t0 + 0.75), 2.2)
+        t0 = T.S_TWELVE + 1.15 + i * 0.30
+        app = ease_out(seg(t, t0, t0 + 0.55), 2.4)
         if app <= 0.004:
             continue
-        sym_fade = 1.0 - smooth(seg(t, T4 - 0.15, T4 + 0.75))
-        a = app * presence * max(0.0, 1 - 2.2 * pull) * (sym_fade if t < T5 else 0.0)
-        scale = 0.72 + 0.28 * app
-        symbols.draw(fr, name, pts[i], sym_r * scale, 2.6 * u, a, GOLD_PALE)
+        a = app * presence * max(0.0, 1 - 2.4 * pull)
+        symbols.draw(fr, name, pts[i], sym_r * (0.7 + 0.3 * app), 2.5 * u, a, GOLD_PALE)
         if app < 1:
-            fr.pen(WARM, glow=1.8).disc(pts[i], sym_r * 0.22 * (1 - app) + 2 * u, (1 - app) * 0.9)
+            fr.pen(WARM, glow=2.0, ss=1).disc(pts[i], sym_r * 0.3 * (1 - app) + 2 * u,
+                                              (1 - app) * 0.9)
 
-    # Das Netz der Gespraeche: Linien und wandernde Nachrichten
     for k, (a_i, b_i) in enumerate(LINKS):
-        t0 = T3 + 3.7 + k * 0.30
-        grow = ease_out(seg(t, t0, t0 + 0.85), 2.0)
+        t0 = T.S_TWELVE + 4.3 + k * 0.16
+        grow = ease_out(seg(t, t0, t0 + 0.55), 2.0)
         if grow <= 0.004:
             continue
         p0, p1 = pts[a_i], pts[b_i]
         tip = (p0[0] + (p1[0] - p0[0]) * grow, p0[1] + (p1[1] - p0[1]) * grow)
-        alpha = 0.46 * presence * (1 - 0.5 * pull)
-        fr.pen(BLUE, glow=0.7).line(p0, tip, 1.1 * u, alpha)
-        if grow >= 1 and pull < 0.35:
-            phase = ((t - t0 - 0.85) * 0.42 + k * 0.13) % 1.0
+        fr.pen(BLUE, glow=0.7, ss=1).line(p0, tip, 1.2 * u, 0.42 * presence * (1 - pull))
+        if grow >= 1 and pull < 0.3:
+            phase = ((t - t0) * 0.5 + k * 0.11) % 1.0
             mp = (p0[0] + (p1[0] - p0[0]) * phase, p0[1] + (p1[1] - p0[1]) * phase)
-            fr.pen(TEAL, glow=1.7).disc(mp, 3.0 * u, 0.85 * presence * (1 - pull))
+            fr.pen(TEAL, glow=1.8, ss=1).disc(mp, 3.4 * u, 0.9 * presence * (1 - pull))
 
-    cap = fade(t, T3 + 5.6, T3 + 6.3, T4 - 0.30, T4 + 0.25)
+    cap = fade(t, T.S_TWELVE + 7.0, T.S_TWELVE + 7.6, T.S_CLAIM - 0.35, T.S_CLAIM + 0.1)
     if cap > 0:
-        f = L.fit("Cinzel", 46, 620, "SIEBEN WEGE · EIN TISCH", 0.86, tracking=12 * u)
-        _lines(fr, L, "SIEBEN WEGE · EIN TISCH", f, L.y(0.895), GOLD_PALE, cap,
-               tracking=12 * u)
+        f = L.fit("Cinzel", 48, 640, T.CAPTION_TWELVE, 0.84, tracking=13 * u)
+        block(fr, L, T.CAPTION_TWELVE, f, L.y(0.90), GOLD_PALE, cap, tracking=13 * u)
 
 
-# ------------------------------------------------------------------ S4 ------
-FEATURES = [
-    "Tägliche Debatten – von Theodizee bis Kopftuchstreit",
-    "Moderiert. Ohne Bekehrungsdruck.",
-    "Voice-Runden am Abend",
-    "Für Gläubige, Zweifler und Atheisten",
-]
-
-
-def scene_four(fr, L, t):
-    if not (T4 - 0.5 <= t <= T5 + 0.4):
+# ---------------------------------------------------------------- S6 --------
+def scene_claim(fr, L, t):
+    if not (T.S_CLAIM - 0.4 <= t <= T.S_EMBLEM + 0.3):
         return
     u = L.u
-    claim = fade(t, T4 + 0.35, T4 + 1.15, T4 + 3.2, T4 + 3.9)
-    if claim > 0:
-        big = L.fit("Cinzel", 80, 700, "HIER WIRD", 0.62, tracking=7 * u)
-        rise = (1 - ease_out(seg(t, T4 + 0.35, T4 + 1.6))) * 20 * u
-        rows_a = _wrap(big, "HIER WIRD GESTRITTEN.", L.text_w, 7 * u)
-        step = big.size * 1.22
-        top = L.y(0.455) - (len(rows_a) * step + step * 1.35) / 2 + rise
-        for i, row in enumerate(rows_a):
-            fr.text(row, big, (L.cx, top + i * step), WARM, claim,
-                    anchor="mm", tracking=7 * u)
-        c2 = fade(t, T4 + 1.25, T4 + 2.0, T4 + 3.2, T4 + 3.9)
-        y2 = top + len(rows_a) * step + step * 0.22
-        fr.text("NICHT GEHETZT.", big, (L.cx, y2), GOLD, c2, anchor="mm",
-                tracking=7 * u)
-        sub = fade(t, T4 + 2.15, T4 + 2.85, T4 + 3.3, T4 + 3.9)
-        if sub > 0:
-            fs = font("Inter", 38 * u, 380)
-            _lines(fr, L, "Argumente statt Parolen. Neugier statt Feindbilder.",
-                   fs, y2 + step * 1.15, DIM, sub)
-
-    # Vier Zeilen ueber den Server - linksbuendiger Block, Punkt davor
-    base = T4 + 3.75
-    f = font("Inter", 40 * u, 430)
-    blocks = [_wrap(f, line, L.text_w * 0.74) for line in FEATURES]
-    width = max(max(f.getlength(r) for r in rows) for rows in blocks)
-    x0 = L.cx - width / 2 + 18 * u
-    lead = f.size * 1.28
-    heights = [len(rows) * lead for rows in blocks]
-    gap = 34 * u
-    total = sum(heights) + gap * (len(blocks) - 1)
-    y = L.y(0.50) - total / 2
-    for i, rows in enumerate(blocks):
-        t0 = base + i * 0.40
-        a = fade(t, t0, t0 + 0.65, T5 - 1.05, T5 - 0.35)
-        if a > 0.004:
-            slide = (1 - ease_out(seg(t, t0, t0 + 0.9), 2.5)) * 26 * u
-            for j, row in enumerate(rows):
-                fr.text(row, f, (x0 + slide, y + j * lead + lead / 2), WARM, a,
-                        anchor="lm")
-            fr.pen(GOLD, glow=1.3).disc((x0 - 26 * u + slide, y + lead / 2), 4.0 * u, a)
-        y += heights[i] + gap
+    a1 = fade(t, T.S_CLAIM + 0.15, T.S_CLAIM + 0.6, T.S_EMBLEM - 0.5, T.S_EMBLEM - 0.05)
+    if a1 <= 0.004:
+        return
+    big = L.fit("Cinzel", 88, 720, "HIER WIRD", 0.60, tracking=8 * u)
+    rows_a = wrap(big, T.CLAIM_A, L.text_w, 8 * u)
+    step = big.size * 1.20
+    top = L.y(0.44) - (len(rows_a) * step + step) / 2
+    rise = (1 - ease_out(seg(t, T.S_CLAIM + 0.15, T.S_CLAIM + 1.0), 2.6)) * 26 * u
+    for i, row in enumerate(rows_a):
+        fr.text(row, big, (L.cx, top + i * step + rise), WARM, a1, anchor="mm",
+                tracking=8 * u)
+    a2 = fade(t, T.S_CLAIM + 1.75, T.S_CLAIM + 2.15, T.S_EMBLEM - 0.5, T.S_EMBLEM - 0.05)
+    y2 = top + len(rows_a) * step + step * 0.24
+    pop = 1.0 + 0.06 * math.exp(-((t - T.S_CLAIM - 1.85) / 0.18) ** 2)
+    fr.text(T.CLAIM_B, L.fit("Cinzel", 88 * pop, 720, T.CLAIM_B, 0.72, tracking=8 * u),
+            (L.cx, y2), GOLD, a2, anchor="mm", tracking=8 * u)
+    a3 = fade(t, T.S_CLAIM + 3.3, T.S_CLAIM + 3.8, T.S_EMBLEM - 0.5, T.S_EMBLEM - 0.05)
+    if a3 > 0:
+        f = L.fit("Inter", 40, 380, T.CLAIM_SUB, 0.80)
+        block(fr, L, T.CLAIM_SUB, f, y2 + step * 1.05, DIM, a3)
 
 
-# ------------------------------------------------------------------ S5 ------
+# ---------------------------------------------------------------- S7 --------
 def emblem(fr, L, t, alpha):
-    """Zwei Kreise, die einander durchdringen - das Zeichen des Dialogs."""
     if alpha <= 0.004:
         return
     u = L.u
     cx, cy = L.cx, L.y(EMBLEM_Y)
-    R = 84 * u
-    close = ease_out(seg(t, T5 + 0.25, T5 + 1.35), 2.2)
-    off = (1 - close) * 90 * u + R * 0.42
-    pen = fr.pen(GOLD, glow=1.2)
-    pen.ring((cx - off, cy), R, 1.9 * u, alpha * 0.9)
-    pen.ring((cx + off, cy), R, 1.9 * u, alpha * 0.9)
-    pen.ring((cx, cy), R * 1.62, 1.0 * u, alpha * 0.35)
-    core_a = alpha * close
-    fr.pen(GOLD_PALE, glow=1.9).disc((cx, cy), 5.0 * u * (0.6 + 0.4 * close), core_a)
-    for i in range(7):
-        ang = -math.pi / 2 + i * math.tau / 7
-        rr = R * 1.62
-        fr.pen(GOLD, glow=1.0).disc((cx + rr * math.cos(ang), cy + rr * math.sin(ang)),
-                                    2.2 * u, alpha * 0.55 * close)
+    R = 100 * u
+    close = ease_out(seg(t, T.S_EMBLEM + 0.1, T.S_EMBLEM + 1.1), 2.4)
+    off = (1 - close) * 110 * u + R * 0.42
+    pen = fr.pen(GOLD, glow=1.3)
+    pen.ring((cx - off, cy), R, 2.0 * u, alpha * 0.92)
+    pen.ring((cx + off, cy), R, 2.0 * u, alpha * 0.92)
+    pen.ring((cx, cy), R * 1.66, 1.1 * u, alpha * 0.38)
+    fr.pen(GOLD_PALE, glow=2.0, ss=1).disc((cx, cy), 5.5 * u * (0.6 + 0.4 * close),
+                                           alpha * close)
+    for i in range(len(symbols.ORDER)):
+        ang = -math.pi / 2 + i * math.tau / len(symbols.ORDER)
+        rr = R * 1.66
+        fr.pen(GOLD, glow=1.1, ss=1).disc((cx + rr * math.cos(ang), cy + rr * math.sin(ang)),
+                                          2.4 * u, alpha * 0.6 * close)
 
 
-def scene_five(fr, L, t):
-    if t < T5 - 0.3:
+def scene_emblem(fr, L, t):
+    if t < T.S_EMBLEM - 0.2:
         return
     u = L.u
-    # Lichtstoss im Moment des Emblems
-    flash = math.exp(-((t - T5 - 0.05) / 0.26) ** 2)
+    flash = math.exp(-((t - T.S_EMBLEM - 0.05) / 0.24) ** 2)
     if flash > 0.01:
-        fr.pen(WARM, glow=1.8).disc((L.cx, L.y(EMBLEM_Y)), 34 * u * (0.5 + 0.8 * flash),
-                                    0.42 * flash)
-        grow = seg(t, T5, T5 + 0.85)
-        fr.pen(GOLD_PALE, glow=1.4).ring((L.cx, L.y(EMBLEM_Y)),
-                                         (60 + 520 * ease_out(grow, 2.4)) * u,
-                                         2.4 * u * (1 - grow), 0.7 * (1 - grow))
-    emb = fade(t, T5 + 0.15, T5 + 1.0, TEND + 5, TEND + 6)
+        fr.pen(WARM, glow=2.0, ss=1).disc((L.cx, L.y(EMBLEM_Y)),
+                                          40 * u * (0.5 + 0.9 * flash), 0.5 * flash)
+    emb = fade(t, T.S_EMBLEM + 0.1, T.S_EMBLEM + 0.7, T.END + 9, T.END + 9)
     emblem(fr, L, t, emb)
 
-    # Der Name zieht sich aus der Weite zusammen
-    ta = fade(t, T5 + 0.95, T5 + 1.9, TEND + 5, TEND + 6)
+    ta = fade(t, T.S_EMBLEM + 0.75, T.S_EMBLEM + 1.5, T.END + 9, T.END + 9)
     if ta > 0:
-        prog = ease_out(seg(t, T5 + 0.95, T5 + 2.5), 2.4)
-        tr = (52 - 38 * prog) * u
-        f = L.fit("Cinzel", 72, 640, "DIALOG DER", 0.66, tracking=tr)
-        _lines(fr, L, "DIALOG DER RELIGIONEN", f, L.y(0.505), WARM, ta,
-               tracking=tr, lead=1.24)
+        prog = ease_out(seg(t, T.S_EMBLEM + 0.75, T.S_EMBLEM + 2.2), 2.4)
+        tr = (56 - 42 * prog) * u
+        if L.tall:
+            f = L.fit("Cinzel", 76, 660, "RELIGIONEN", 0.80, tracking=tr)
+            block(fr, L, "DIALOG DER\nRELIGIONEN", f, L.y(0.455), WARM, ta,
+                  tracking=tr, lead=1.22)
+        else:
+            f = L.fit("Cinzel", 76, 660, T.TITLE, 0.86, tracking=tr)
+            block(fr, L, T.TITLE, f, L.y(0.455), WARM, ta, tracking=tr, lead=1.22)
 
-    ln = ease_out(seg(t, T5 + 2.0, T5 + 2.9), 2.0) * fade(t, T5 + 2.0, T5 + 2.2,
-                                                          TEND + 5, TEND + 6)
+    ln = fade(t, T.S_EMBLEM + 1.8, T.S_EMBLEM + 2.1, T.END + 9, T.END + 9)
     if ln > 0:
-        half = L.w * 0.16 * ln
-        y = L.y(0.565)
-        fr.pen(GOLD, glow=1.0).line((L.cx - half, y), (L.cx + half, y), 1.2 * u, 0.75)
+        half = L.w * 0.17 * ease_out(seg(t, T.S_EMBLEM + 1.8, T.S_EMBLEM + 2.7), 2.0)
+        y = L.y(0.525)
+        fr.pen(GOLD, glow=1.1, ss=1).line((L.cx - half, y), (L.cx + half, y), 1.4 * u, 0.8)
 
-    sa = fade(t, T5 + 2.4, T5 + 3.2, TEND + 5, TEND + 6)
+    sa = fade(t, T.S_EMBLEM + 2.1, T.S_EMBLEM + 2.7, T.END + 9, T.END + 9)
     if sa > 0:
-        f = font("Inter", 35 * u, 380)
-        _lines(fr, L, "Der Discord für ehrliche Gespräche über Gott und die Welt.",
-               f, L.y(0.625), DIM, sa)
+        f = L.fit("Inter", 36, 380, T.SUBTITLE, 0.82)
+        block(fr, L, T.SUBTITLE, f, L.y(0.585), DIM, sa)
 
 
-# ------------------------------------------------------------------ S6 ------
-def scene_six(fr, L, t):
-    if t < T6 - 0.5:
+# ---------------------------------------------------------------- S8 --------
+def scene_cta(fr, L, t):
+    if t < T.S_CTA - 0.6:
         return
     u = L.u
-    a = fade(t, T6 - 0.1, T6 + 0.75, TEND + 5, TEND + 6)
+    a = fade(t, T.S_CTA - 0.35, T.S_CTA + 0.35, T.END + 9, T.END + 9)
     if a > 0:
-        label = "discord.gg/dialog-der-religionen"
-        f = L.fit("Inter", 44, 600, label + "aaaa", 0.86)
-        tw = f.getlength(label) + 6 * u * (len(label) - 1) * 0.0
-        pad_x, pad_y = 54 * u, 30 * u
-        y = L.y(0.735) + (1 - ease_out(seg(t, T6 - 0.1, T6 + 0.9), 2.4)) * 24 * u
+        f = L.fit("Inter", 46, 620, T.LINK + "aaaa", 0.84)
+        tw = f.getlength(T.LINK)
+        pad_x, pad_y = 56 * u, 32 * u
+        y = L.y(0.715) + (1 - ease_out(seg(t, T.S_CTA - 0.35, T.S_CTA + 0.5), 2.6)) * 30 * u
         box = (L.cx - tw / 2 - pad_x, y - pad_y - 6 * u,
                L.cx + tw / 2 + pad_x, y + pad_y + 6 * u)
-        breath = 0.72 + 0.28 * (0.5 + 0.5 * math.sin((t - T6) * 2.4))
-        fr.pen(GOLD, glow=1.6).rounded_rect(box, 40 * u, 2.0 * u, a * breath)
-        fr.text(label, f, (L.cx, y), GOLD_PALE, a, anchor="mm")
+        breath = 0.70 + 0.30 * (0.5 + 0.5 * math.sin((t - T.S_CTA) * 2.6))
+        fr.pen(GOLD, glow=1.7).rounded_rect(box, 42 * u, 2.2 * u, a * breath)
+        fr.text(T.LINK, f, (L.cx, y), GOLD_PALE, a, anchor="mm")
 
-    b = fade(t, T6 + 0.9, T6 + 1.7, TEND + 5, TEND + 6)
+    b = fade(t, T.S_CTA + 0.7, T.S_CTA + 1.3, T.END + 9, T.END + 9)
     if b > 0:
-        f = font("EBGaramond-Italic", 54 * u, 440)
-        _lines(fr, L, "Komm rein. Stell deine Frage.", f, L.y(0.855), WARM, b)
+        f = L.fit("EBGaramond-Italic", 56, 450, T.CTA_LINE, 0.84)
+        block(fr, L, T.CTA_LINE, f, L.y(0.83), WARM, b)
 
-    # Zum Schluss bleibt der eine Lichtpunkt vom Anfang
-    # Das Licht vom Anfang pulsiert leise im Emblem weiter
-    glowpt = fade(t, T6 + 1.6, T6 + 2.4, TEND, TEND)
-    if glowpt > 0:
-        beat = 0.55 + 0.45 * math.sin((t - T6) * 1.9)
-        fr.pen(GOLD_PALE, glow=2.0).disc((L.cx, L.y(EMBLEM_Y)), 6.0 * u, glowpt * beat)
+    c = fade(t, T.S_CTA + 1.5, T.S_CTA + 2.1, T.END + 9, T.END + 9)
+    if c > 0:
+        f = L.fit("Inter", 26, 400, T.FEATURE_LINE, 0.88)
+        block(fr, L, T.FEATURE_LINE, f, L.y(0.925), DIM, c * 0.85)
 
 
-# ------------------------------------------------------------- Steuerung ----
-def exposure(t: float) -> float:
-    """Globale Belichtung: Aufblende, Lichtstoss beim Emblem, Abblende."""
-    e = 1.34
-    e *= smooth(seg(t, 0.0, 0.9))
-    e += 0.85 * math.exp(-((t - T5 - 0.08) / 0.20) ** 2)
-    e += 0.16 * math.exp(-((t - T3 - 0.32) / 0.30) ** 2)
-    e *= 1.0 - 0.22 * smooth(seg(t, TEND - 0.45, TEND))
-    return e
-
-
-def mist_gain(t: float) -> float:
-    return 0.42 + 0.34 * smooth(seg(t, 2.0, 14.0)) - 0.18 * smooth(seg(t, T5, T5 + 2.0))
-
-
-def render(fr, L, t):
-    scene_one(fr, L, t)
-    scene_two(fr, L, t)
-    scene_three(fr, L, t)
-    scene_four(fr, L, t)
-    scene_five(fr, L, t)
-    scene_six(fr, L, t)
+def render(fr, L, t, stage: Stage | None = None):
+    if stage is not None:
+        stage.background(fr, L, t)
+    scene_intro(fr, L, t)
+    scene_storm(fr, L, t)
+    scene_philosophers(fr, L, t)
+    scene_debate(fr, L, t)
+    scene_twelve(fr, L, t)
+    scene_claim(fr, L, t)
+    scene_emblem(fr, L, t)
+    scene_cta(fr, L, t)
